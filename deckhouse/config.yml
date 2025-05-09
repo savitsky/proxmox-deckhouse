@@ -1,0 +1,47 @@
+# Section with general cluster parameters (ClusterConfiguration)
+# API version used by Deckhouse Platform
+apiVersion: deckhouse.io/v1
+# Type of configuration section
+kind: ClusterConfiguration
+# Type of infrastructure: bare metal (Static) or cloud (Cloud)
+clusterType: Static
+# Pod network CIDR for the cluster
+podSubnetCIDR: 10.117.0.0/16
+# Service network CIDR for the cluster
+serviceSubnetCIDR: 10.222.0.0/16
+# Kubernetes version to be installed
+kubernetesVersion: "1.25"
+# Cluster domain
+clusterDomain: "cluster.local"
+---
+# Section for initial Deckhouse cluster initialization (InitConfiguration)
+# API version used by Deckhouse
+apiVersion: deckhouse.io/v1
+# Type of configuration section
+kind: InitConfiguration
+# Section with Deckhouse parameters
+deckhouse:
+  # Update release channel
+  releaseChannel: Stable
+  configOverrides:
+    global:
+      modules:
+        # Template used to form system app domain names in the cluster
+        # For example, Grafana for %s.exch-vnet.ooo.ua will be available at grafana.exch-vnet.ooo.ua
+        publicDomainTemplate: "%s.test.example.com"
+    # Enable the cni-cilium module
+    cniCiliumEnabled: true
+    # Configuration of the cni-cilium module
+    # https://deckhouse.io/documentation/v1/modules/021-cni-cilium/configuration.html
+    cniCilium:
+      tunnelMode: VXLAN
+---
+# Section with bare metal cluster parameters (StaticClusterConfiguration)
+# API version used by Deckhouse
+apiVersion: deckhouse.io/v1
+# Type of configuration section
+kind: StaticClusterConfiguration
+# List of internal node networks (e.g., '10.0.4.0/24') used
+# for communication between Kubernetes components (kube-apiserver, kubelet, etc.)
+internalNetworkCIDRs:
+- 192.168.4.0/24

@@ -1,0 +1,39 @@
+stages:
+  - build
+  - cleanup
+
+build:
+  stage: build
+  script:
+    - git branch
+    - terraform init
+    - terraform apply --auto-approve
+    - ls
+  artifacts:
+    paths:
+      - terraform.tfstate.backup
+      - terraform.tfstate
+  except: [schedules]
+  timeout: 3 hours 30 minutes
+  tags: [dev]
+  environment:
+    name: test
+  only:
+    - main
+
+cleanup:
+  stage: cleanup
+  script:
+    - terraform init
+    - ls
+    - terraform destroy --auto-approve
+  allow_failure: true
+  dependencies:
+    - build
+  except: [schedules]
+  tags: [dev]
+  when: manual
+  environment:
+    name: test
+  only:
+    - main

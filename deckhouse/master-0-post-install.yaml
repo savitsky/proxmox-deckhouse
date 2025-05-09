@@ -1,0 +1,247 @@
+---
+- hosts: all
+  gather_facts: no
+  vars_files:
+    - 'vars.yaml'
+  become: yes
+  tasks:
+    - name: Creating a symlink
+      ansible.builtin.file:
+        src: "/opt/deckhouse/bin/kubectl"
+        dest: "/usr/bin/kubectl"
+        state: link
+
+    - name: Ensure directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "/root/deckhouse/users/"
+        - "/root/deckhouse/ng/"
+        - "/root/deckhouse/modules-conf/"
+        - "/root/deckhouse/ci-cd/"
+
+    - name: Create frontend.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ng/frontend.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: NodeGroup
+          metadata:
+            name: frontend
+          spec:
+            nodeTemplate:
+              labels:
+                node-role.deckhouse.io/frontend: ""
+              taints:
+                - effect: NoExecute
+                  key: dedicated.deckhouse.io
+                  value: frontend
+            nodeType: Static
+
+    - name: Create ng-system.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ng/ng-system.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: NodeGroup
+          metadata:
+            name: system
+          spec:
+            nodeTemplate:
+              labels:
+                node-role.deckhouse.io/system: ""
+              taints:
+                - effect: NoExecute
+                  key: dedicated.deckhouse.io
+                  value: system
+            nodeType: Static
+
+    - name: Create ng-worker.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ng/ng-worker.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: NodeGroup
+          metadata:
+            name: worker
+          spec:
+            nodeType: Static
+
+    - name: Wait for API Service to be available
+      command: kubectl wait --for=condition=Available apiservices/v1.deckhouse.io
+      register: kubectl_wait_result_v1_deckhouse_io
+      ignore_errors: yes
+
+    - name: Display kubectl wait output for apiservices-v1.deckhouse.io
+      debug:
+        var: kubectl_wait_result_v1_deckhouse_io.stdout_lines
+
+    - name: Wait for deployment webhook-handler to be available
+      command: kubectl wait --for=condition=Available deployment/webhook-handler -n d8-system
+      register: kubectl_wait_result_webhook_handler
+      ignore_errors: yes
+
+    - name: Display output for kubectl_wait_result_webhook_handler
+      debug:
+        var: kubectl_wait_result_webhook_handler.stdout_lines
+
+    - name: create node groups
+      shell: "cd /root/deckhouse/ng/ && kubectl apply -f ."
+
+    - name: Create sa.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ci-cd/sa.yaml"
+        content: |
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: gitlab-runner-deploy
+            namespace: d8-service-accounts
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: gitlab-runner-deploy-token
+            namespace: d8-service-accounts
+            annotations:
+              kubernetes.io/service-account.name: gitlab-runner-deploy
+          type: kubernetes.io/service-account-token
+
+    - name: Create car.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ci-cd/car.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: ClusterAuthorizationRule
+          metadata:
+            name: gitlab-runner-deploy
+          spec:
+            subjects:
+            - kind: ServiceAccount
+              name: gitlab-runner-deploy
+              namespace: d8-service-accounts
+            accessLevel: SuperAdmin
+
+    - name: Create config-for-ci
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ci-cd/make-config.sh"
+        content: |
+          cluster_name= {{ dh_domain }}
+          user_name=gitlab-runner-deploy.${cluster_name}
+          context_name=${cluster_name}-${user_name}
+          file_name=kube.config
+          
+          kubectl config set-cluster $cluster_name \
+            --server=https://$(kubectl -n d8-user-authn get ing kubernetes-api -ojson | jq '.spec.rules[].host' -r) \
+            --kubeconfig=$file_name
+          
+          kubectl config set-credentials $user_name \
+            --token=$(kubectl -n d8-service-accounts get secret gitlab-runner-deploy-token -o json |jq -r '.data["token"]' | base64 -d) \
+            --kubeconfig=$file_name
+          
+          kubectl config set-context $context_name \
+            --cluster=$cluster_name --user=$user_name \
+            --kubeconfig=$file_name
+          
+          kubectl config use-context $context_name --kubeconfig=$file_name
+          
+          base64 $file_name > /root/deckhouse/ci-cd/config-for-ci
+
+    - name: Create cert-manager.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/modules-conf/cert-manager.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1alpha1
+          kind: ModuleConfig
+          metadata:
+            name: cert-manager
+          spec:
+            version: 1
+            settings:
+              cloudflareGlobalAPIKey: "{{ cloudflare_global_api_key }}"
+              cloudflareEmail: "{{ cloudflare_email }}"
+
+    - name: Create global.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/modules-conf/global.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1alpha1
+          kind: ModuleConfig
+          metadata:
+            name: global
+          spec:
+            version: 1
+            settings:
+              modules:
+                publicDomainTemplate: '%s.{{ data_center }}.ooo.ua'
+                https:
+                  certManager:
+                     clusterIssuerName: cloudflare
+                  mode: CertManager
+
+    - name: Create user-auth.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/modules-conf/user-auth.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1alpha1
+          kind: ModuleConfig
+          metadata:
+            name: user-authn
+          spec:
+            version: 1
+            enabled: true
+            settings:
+              publishAPI:
+                enable: true
+                https:
+                  mode: Global
+                whitelistSourceRanges: [{{ whitelistSourceRange }}, 46.229.232.7]
+              https:
+                mode: CertManager
+                certManager:
+                  clusterIssuerName: cloudflare
+
+    - name: apply modules configs
+      shell: "cd /root/deckhouse/modules-conf/ && kubectl apply -f ."
+
+    - name: Create script for token.key request
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/ci-cd/create-token.key.sh"
+        content: |
+          #!/bin/bash
+          #/opt/deckhouse/bin/kubectl -n d8-cloud-instance-manager get $(/opt/deckhouse/bin/kubectl -n d8-cloud-instance-manager get secret -o name | grep node-group-token) -o json | jq ".data.token" -r | base64 -d  > /root/deckhouse/ci-cd/token.key
+          kubectl create token node-group --namespace d8-cloud-instance-manager --duration 1h > /root/deckhouse/ci-cd/token.key
+          if [ -s "/root/deckhouse/ci-cd/token.key" ]; then
+               exit 0  # файл c токеном создан и имеет не нулевую длину
+          else
+              exit 1  # файл c токеном не создан или имеет нулевую длину
+          fi
+
+    - name: Set executive permissions for create-token.key.sh
+      file:
+        path: "/root/deckhouse/ci-cd/create-token.key.sh"
+        mode: "0755"
+
+    - name: Waiting for token_output.txt to be ready
+      command: "/root/deckhouse/ci-cd/create-token.key.sh"
+      register: result
+      until: result.rc == 0
+      retries: 100
+      delay: 10
+
+    - name: upload token.key to local PC
+      fetch:
+        src: /root/deckhouse/ci-cd/token.key
+        dest: ./token.key
+        flat: yes  # Если вы хотите сохранить файл на локальной машине без пути к хосту
+
+    - name: remove temporary file
+      ansible.builtin.file:
+        path: "/root/deckhouse/ci-cd/token.key"
+        state: absent
+
+    - name: msg
+      debug:
+        msg: "------======= Deckhouse setup complete, ready for add other nodes =======------"

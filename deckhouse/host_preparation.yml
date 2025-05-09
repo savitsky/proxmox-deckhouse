@@ -1,0 +1,118 @@
+---
+- hosts: all
+  become: yes
+  tasks:
+    - name: Update system
+      shell: apt update
+      async: 3600
+      poll: 0
+      ignore_errors: yes
+      changed_when: false
+
+#    - name: Reboot
+#      shell: reboot
+#      async: 1
+#      poll: 0
+#      ignore_errors: yes
+#      changed_when: false
+#
+#    - name: Wait for SSH to be available
+#      wait_for_connection:
+#        delay: 60
+#        timeout: 300
+
+    - name: Set hostname
+      command: hostnamectl set-hostname {{ node_name }}
+
+    - name: Uncomment force_color_prompt
+      lineinfile:
+        path: /root/.bashrc
+        regexp: '^#force_color_prompt=yes'
+        line: 'force_color_prompt=yes'
+
+    # SSH Configuration
+    - name: Ensure sshd_config.d directory exists
+      file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+
+    - name: Create my-sshd_config.conf
+      copy:
+        dest: /etc/ssh/sshd_config.d/my-sshd_config.conf
+        content: |
+          PubkeyAuthentication yes
+          PasswordAuthentication no
+          PermitEmptyPasswords no
+          ChallengeResponseAuthentication no
+          HostbasedAuthentication no
+          IgnoreRhosts yes
+          KerberosAuthentication no
+
+    - name: Reload ssh service
+      systemd:
+        name: ssh.service
+        state: reloaded
+
+    - name: Update apt cache and install packages
+      apt:
+        name:
+          - qemu-guest-agent
+          - mc
+          - htop
+          - fail2ban
+        update_cache: yes
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: Enable and start qemu-guest-agent
+      ansible.builtin.service:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
+
+    # Fail2ban configuration
+    - name: Copy jail.conf to jail.local
+      copy:
+        src: /etc/fail2ban/jail.conf
+        dest: /etc/fail2ban/jail.local
+        remote_src: yes
+
+    - name: Enable and start fail2ban service
+      systemd:
+        name: fail2ban
+        enabled: yes
+        state: started
+
+    - name: Create sshd-invaliduser filter
+      copy:
+        dest: /etc/fail2ban/filter.d/sshd-invaliduser.conf
+        content: |
+          [INCLUDES]
+          before = common.conf
+
+          [Definition]
+          _daemon = sshd
+
+          failregex = ^%(__prefix_line)s[iI](?:llegal|nvalid) user .*? from <HOST>(?: port \d+)?\s*$
+          ignoreregex = 
+
+          [Init]
+          journalmatch = _SYSTEMD_UNIT=sshd.service + _COMM=sshd
+
+    - name: Add sshd-invaliduser to jail.local
+      lineinfile:
+        path: /etc/fail2ban/jail.local
+        line: |
+          [sshd-invaliduser]
+          enabled = true
+          maxretry = 1
+          port    = ssh
+          logpath = %(sshd_log)s
+          backend = %(sshd_backend)s
+
+    - name: Reload fail2ban service
+      systemd:
+        name: fail2ban
+        state: reloaded

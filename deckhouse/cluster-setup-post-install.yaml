@@ -1,0 +1,134 @@
+---
+- hosts: all
+  gather_facts: no
+  vars_files:
+    - 'vars.yaml'
+  become: yes
+  tasks:
+    - name: Wait for Nodes to be available
+      command: kubectl wait --for=condition=Ready pod --all --all-namespaces
+      register: kubectl_wait_result
+      ignore_errors: yes
+      until: kubectl_wait_result.rc == 0
+      retries: 100
+      delay: 10
+
+    - name: Display kubectl wait output
+      debug:
+        var: kubectl_wait_result.stdout_lines
+
+    - name: Create IngressNginxController.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/IngressNginxController.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: IngressNginxController
+          metadata:
+            name: nginx
+          spec:
+            # имя Ingress-класса для обслуживания Ingress NGINX controller
+            ingressClass: nginx
+            # версия Ingress-контроллера (используйте версию 1.1 с Kubernetes 1.23+)
+            controllerVersion: "1.1"
+            # способ поступления трафика из внешнего мира
+            inlet: HostPort
+            hostPort:
+              httpPort: 80
+              httpsPort: 443
+            # описывает, на каких узлах будет находиться компонент
+            # возможно, захотите изменить
+            nodeSelector:
+              node-role.kubernetes.io/control-plane: ""
+            tolerations:
+            - operator: Exists
+
+    - name: apply IngressNginxController.yaml
+      shell: "kubectl apply -f /root/deckhouse/IngressNginxController.yaml"
+
+    - name: Wait for IngressNginxController to be available
+      command: kubectl wait --for=condition=Ready pod --all -n d8-ingress-nginx
+      register: kubectl_wait_result
+      ignore_errors: yes
+
+    - name: Display kubectl wait output
+      debug:
+        var: kubectl_wait_result.stdout_lines
+
+    - name: Create user files
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/users/{{ item.name }}.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: ClusterAuthorizationRule
+          metadata:
+            name: {{ item.metadata_name }}
+          spec:
+            subjects:
+            - kind: User
+              name: {{ item.email }}
+            accessLevel: {{ item.access_level }}
+            portForwarding: true
+      loop: "{{ users }}"
+
+    - name: make git application
+      uri:
+        url: "https://git.example.com/api/v4/applications"
+        return_content: yes
+        method: POST
+        status_code: 201
+        body_format: form-urlencoded
+        body:
+          - [name, '{{ data_center }}' ]
+          - [redirect_uri, 'https://dex.{{ dh_domain }}/callback']
+          - [scopes, 'read_user openid' ]
+        headers:
+          PRIVATE-TOKEN: "{{ git_token }}"
+        validate_certs: no
+      register: application
+
+    - name: make dex autorization via gitlab
+      copy:
+        dest: "/root/deckhouse/dex-provider.yaml"
+        content: |
+          apiVersion: deckhouse.io/v1
+          kind: DexProvider
+          metadata:
+            name: gitlab
+          spec:
+            type: Gitlab
+            displayName: Dedicated Gitlab
+            gitlab:
+              baseURL: https://git.ooo.ua
+              clientID: {{ application.json['application_id'] }}
+              clientSecret: {{ application.json['secret'] }}
+              groups:
+              - kube-{{ data_center }}
+          
+    - name: apply modules configs
+      shell: "cd /root/deckhouse/ && kubectl apply -f ."
+
+    - name: apply users
+      shell: "cd /root/deckhouse/users/ && kubectl apply -f ."
+
+    - name: Create Ingres-CF.yaml
+      ansible.builtin.copy:
+        dest: "/root/deckhouse/Ingres-CF.yaml"
+        content: |
+          apiVersion: v1
+          data:
+            # Cloudflare IP ranges which you can find online
+            proxy-real-ip-cidr: "173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/12,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32"
+            # This is the important part
+            use-forwarded-headers: "true"
+            # Still works without this line because it defaults to X-Forwarded-For, but I use it anyways
+            forwarded-for-header: "CF-Connecting-IP"
+          kind: ConfigMap
+          metadata:
+            name: nginx-configuration
+            namespace: d8-ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+
+    - name: apply Ingres-CF.yaml
+      shell: "cd /root/deckhouse/ && kubectl apply -f Ingres-CF.yaml"

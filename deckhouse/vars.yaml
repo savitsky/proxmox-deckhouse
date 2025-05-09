@@ -1,0 +1,21 @@
+passw_terraform_prov_user: "Your_password"
+kube_apiserver: "192.168.4.200"
+zone: "example.com"
+dh_domain: "test.example.com"
+data_center: "eu-prague"
+target_value: "YOUR.IP.V4.HERE"    # IP for check resolving domains
+cloudflare_email: "main.email.for.your.CF.account@example.com"
+cloudflare_global_api_key: "APIkey"
+users:
+  - { name: 'user-1', metadata_name: 'admin', email: '1@example.com', access_level: 'SuperAdmin' }
+  - { name: 'user-2', metadata_name: 'user1', email: '2@example.com', access_level: 'SuperAdmin' }
+  - { name: 'user-3', metadata_name: 'user3', email: '3@example.com', access_level: 'PrivilegedUser' }
+
+whitelistSourceRange: "192.168.0.0/16"
+
+git_token: here-your-gitlab-token
+
+cluster_name: "test.example.com"
+user_name: "gitlab-runner-deploy.${cluster_name}"
+context_name: "${cluster_name}-${user_name}"
+file_name: "kube.config"

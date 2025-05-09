@@ -1,0 +1,49 @@
+---
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+    - 'vars.yaml'
+  tasks:
+    - name: Check and update DNS records
+      community.general.cloudflare_dns:
+        zone: "{{ zone }}"
+        type: A
+        record: "{{ item }}"
+        value: "{{ target_value }}"
+        account_email: "{{ cloudflare_email }}"
+        account_api_token: "{{ cloudflare_global_api_key }}"
+      loop:
+        - "dashboard.{{ dh_domain }}"
+        - "documentation.{{ dh_domain }}"
+        - "grafana.{{ dh_domain }}"
+        - "status.{{ dh_domain }}"
+        - "upmeter.{{ dh_domain }}"
+        - "dex.{{ dh_domain }}"
+        - "api.{{ dh_domain }}"
+      register: dns_results
+
+#    - name: Display DNS results
+#      debug:
+#        var: dns_results.results
+#
+#    - name: Create DNS records if they don't exist
+#      community.general.cloudflare_dns:
+#        zone: "{{ zone }}"
+#        type: A
+#        record: "{{ item }}"
+#        value: "{{ target_value }}"
+#        account_email: "{{ cloudflare_email }}"
+#        account_api_token: "{{ cloudflare_global_api_key }}"
+#      loop: "{{ dns_results.results | rejectattr('success', 'defined') | map(attribute='item') | list }}"
+#      when: "item.failed and 'Domain not found' in item.msg"
+#
+#    - name: Update DNS records with incorrect values
+#      community.general.cloudflare_dns:
+#        zone: "{{ zone }}"
+#        type: A
+#        record: "{{ item }}"
+#        value: "{{ target_value }}"
+#        account_email: "{{ cloudflare_email }}"
+#        account_api_token: "{{ cloudflare_global_api_key }}"
+#      loop: "{{ dns_results.results | rejectattr('success', 'defined') | map(attribute='item') | list }}"
+#      when: "item.failed and 'Record data does not match' in item.msg"

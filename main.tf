@@ -1,0 +1,30 @@
+module "virtual_machine" {
+  source                      = "./modules/vm"
+  virtual_machines            = local.machines
+  master0_id                  = 200
+  master0_agent               = 1
+  master0_name                = "master-0"
+  master0_qemu_os             = "other"
+  master0_automatic_reboot    = true
+  master0_cloud_init_pass     = "password"
+  master0_cores               = 8
+  master0_cpu                 = "kvm64"
+  master0_description         = "master 0 node"
+  master0_disk_type           = "virtio"
+  master0_dns_servers         = "8.8.8.8 127.0.0.1"
+  master0_full_clone          = true
+  master0_gateway             = "192.168.4.1"
+  master0_ip_address          = "192.168.4.200"
+  master0_memory              = 16384
+  master0_network_bridge_type = "vmbr0"
+  master0_network_firewall    = false
+  master0_network_model       = "virtio"
+  master0_os_type             = "cloud-init"
+  master0_scsihw              = "virtio-scsi-pci"
+  master0_socket              = 1
+  master0_ssh_user            = "admin"
+  master0_storage             = "100G"
+  master0_storage_dev         = "fast"
+  master0_target_node         = "pve-pr"
+  master0_template            = "ubuntu-cloud-init"
+}
